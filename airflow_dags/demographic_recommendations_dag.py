@@ -3,7 +3,7 @@ from airflow.operators.bash import BashOperator
 from datetime import datetime, timedelta
 
 default_args = {
-    'owner': 'bigdatacombains',
+    'owner': 'win10',
     'depends_on_past': False,
     'email_on_failure': False,
     'email_on_retry': False,
@@ -23,6 +23,6 @@ with DAG(
 
     run_demographics = BashOperator(
         task_id='run_demographic_recommendations',
-        bash_command='spark-submit /home/bigdatacombains/analytics_scripts/demographic_recommendations.py',
+        bash_command='spark-submit /home/win10/analytics_scripts/demographic_recommendations.py',
         execution_timeout=timedelta(minutes=30),
     )

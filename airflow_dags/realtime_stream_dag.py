@@ -11,7 +11,7 @@ import subprocess
 import logging
 
 default_args = {
-    'owner': 'bigdatacombains',
+    'owner': 'win10',
     'depends_on_past': False,
     'start_date': datetime(2025, 12, 26),
     'email_on_failure': False,

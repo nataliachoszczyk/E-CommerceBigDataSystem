@@ -13,7 +13,7 @@ import subprocess
 logger = logging.getLogger(__name__)
 
 default_args = {
-    'owner': 'bigdatacombains',
+    'owner': 'win10',
     'depends_on_past': False,
     'email_on_failure': False,
     'email_on_retry': False,

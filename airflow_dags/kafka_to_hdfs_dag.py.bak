@@ -1,0 +1,160 @@
+"""
+DAG: Kafka to HDFS Archiver
+Regularnie archiwizuje dane z Kafki do HDFS w formacie Parquet.
+Uruchamiany co godzinę, przetwarza dane z poprzedniej godziny.
+"""
+
+from datetime import datetime, timedelta
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+from airflow.operators.python import PythonOperator
+import logging
+
+logger = logging.getLogger(__name__)
+
+default_args = {
+    'owner': 'bigdata-team',
+    'depends_on_past': False,
+    'email_on_failure': False,
+    'email_on_retry': False,
+    'retries': 2,
+    'retry_delay': timedelta(minutes=5),
+}
+
+dag = DAG(
+    'kafka_to_hdfs_archiver',
+    default_args=default_args,
+    description='Archiwizuje eventy z Kafki do HDFS co godzinę',
+    schedule_interval='@hourly',
+    start_date=datetime(2026, 1, 1, 0, 0), 
+    catchup=True,  
+    max_active_runs=1,
+    tags=['kafka', 'hdfs', 'archiving', 'streaming'],
+)
+
+# Task 1: Sprawdzenie, czy Kafka działa
+check_kafka = BashOperator(
+    task_id='check_kafka_running',
+    bash_command="""
+    if ! pgrep -f kafka.Kafka > /dev/null; then
+        echo "Kafka nie działa! Uruchamiam..."
+        /opt/kafka/bin/kafka-server-start.sh -daemon /opt/kafka/config/server.properties
+        sleep 10
+    else
+        echo "Kafka działa"
+    fi
+    """,
+    dag=dag,
+)
+
+# Task 2: Sprawdzenie, czy HDFS działa
+check_hdfs = BashOperator(
+    task_id='check_hdfs_running',
+    bash_command="""
+    if ! pgrep -f NameNode > /dev/null; then
+        echo "HDFS nie działa! Uruchamiam..."
+        /opt/hadoop/sbin/start-dfs.sh
+        sleep 15
+    else
+        echo "HDFS działa"
+    fi
+    """,
+    dag=dag,
+)
+
+# Task 3: Upewnienie się że katalog bazowy istnieje w HDFS
+ensure_hdfs_directory = BashOperator(
+    task_id='ensure_hdfs_directory',
+    bash_command="""
+    hdfs dfs -test -d /raw/events || hdfs dfs -mkdir -p /raw/events
+    echo "Katalog /raw/events gotowy"
+    """,
+    dag=dag,
+)
+
+# Task 4: Uruchomienie archiwizacji
+archive_to_hdfs = BashOperator(
+    task_id='archive_to_hdfs',
+    bash_command="""
+    cd /home/win10/scripts
+    
+    ARCHIVE_TIME="{{ execution_date.strftime('%Y-%m-%d %H:%M:%S') }}"
+    
+    echo "Archiwizuję dane dla godziny: $ARCHIVE_TIME"
+    
+    spark-submit \
+        --master local[2] \
+        --driver-memory 2g \
+        --conf spark.sql.parquet.compression.codec=snappy \
+        kafka_to_hdfs_archiver.py "$ARCHIVE_TIME" \
+        2>&1 | tee /home/win10/airflow/logs/kafka_archiver_{{ ds }}_{{ execution_date.strftime('%H') }}.log
+    
+    EXIT_CODE=${PIPESTATUS[0]}
+    
+    if [ $EXIT_CODE -eq 0 ]; then
+        echo "Archiwizacja zakończona sukcesem"
+    else
+        echo "Archiwizacja nie powiodła się (kod: $EXIT_CODE)"
+        exit $EXIT_CODE
+    fi
+    """,
+    dag=dag,
+)
+
+# Task 5: Dodanie partycji do Hive
+add_hive_partition = BashOperator(
+    task_id='add_hive_partition',
+    bash_command="""
+    spark-sql -e "
+    USE default;
+    
+    ALTER TABLE user_events ADD IF NOT EXISTS 
+    PARTITION (
+        year={{ execution_date.year }},
+        month={{ execution_date.month }},
+        day={{ execution_date.day }},
+        hour={{ execution_date.hour }}
+    )
+    LOCATION '/raw/events/year={{ execution_date.year }}/month={{ '%02d' | format(execution_date.month) }}/day={{ '%02d' | format(execution_date.day) }}/hour={{ '%02d' | format(execution_date.hour) }}';
+    "
+    
+    if [ $? -eq 0 ]; then
+        echo "Partycja dodana pomyślnie"
+    else
+        echo "Partycja już istnieje lub błąd (to OK)"
+    fi
+    """,
+    dag=dag,
+)
+
+# Task 6: Weryfikacja, ile plików zapisano
+verify_archive = BashOperator(
+    task_id='verify_archive',
+    bash_command="""
+    HDFS_PATH="/raw/events/year={{ execution_date.year }}/month={{ '%02d' | format(execution_date.month) }}/day={{ '%02d' | format(execution_date.day) }}/hour={{ '%02d' | format(execution_date.hour) }}"
+    
+    echo "Weryfikacja zapisanych danych w: $HDFS_PATH"
+    
+    if hdfs dfs -test -d $HDFS_PATH; then
+        FILE_COUNT=$(hdfs dfs -ls $HDFS_PATH | grep -c "\.parquet$" || echo "0")
+        TOTAL_SIZE=$(hdfs dfs -du -s -h $HDFS_PATH | awk '{print $1 " " $2}')
+        
+        echo "Liczba plików Parquet: $FILE_COUNT"
+        echo "Rozmiar danych: $TOTAL_SIZE"
+        
+        if [ "$FILE_COUNT" -gt 0 ]; then
+            echo "Weryfikacja pomyślna"
+            exit 0
+        else
+            echo "Brak plików Parquet - może nie było danych w tym okresie"
+            exit 0
+        fi
+    else
+        echo "Katalog nie istnieje!"
+        exit 1
+    fi
+    """,
+    dag=dag,
+)
+
+[check_kafka, check_hdfs] >> ensure_hdfs_directory >> archive_to_hdfs >> verify_archive >> add_hive_partition

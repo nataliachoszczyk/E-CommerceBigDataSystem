@@ -10,7 +10,7 @@ System przeznaczony jest dla średnich i dużych platform e-commerce obsługują
 
 ## Wyniki analiz i wizualizacje
 
-Kompletne wyniki analiz, wizualizacje i interaktywne pulpity znajdują się w pliku: **`ecommerce_analytics.ipynb`**
+Kompletne wyniki analiz i wizualizacje znajdują się w pliku: **`ecommerce_analytics.ipynb`**
 
 ## Źródła danych
 
@@ -61,7 +61,7 @@ Główne komponenty zainstalowane w środowisku:
 - Apache Hive 3.1.3 (hurtownia danych)
 - Apache HBase 2.6.4-hadoop3 (warstwa serwisowa)
 - Apache Airflow 2.8.1 (orkiestrator)
-- Java 8 (OpenJDK 1.8.0_472)
+- Java 17 (OpenJDK 17.0.10)
 
 ## Środowisko wdrożeniowe
 
